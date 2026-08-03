@@ -1,0 +1,53 @@
+{
+  "version": "0.2",
+  "language": "en-GB",
+  "dictionaries": [],
+  "dictionaryDefinitions": [],
+  "enabledLanguageIds": [
+    "markdown",
+    "plaintext",
+    "typescript",
+    "javascript",
+    "typescriptreact",
+    "javascriptreact",
+    "json",
+    "jsonc"
+  ],
+  "ignorePaths": [
+    "node_modules",
+    "dist",
+    "build",
+    ".git",
+    "*.min.js",
+    "*.css",
+    ".claude/conversation-history",
+    "**/.gitignore"
+  ],
+  "ignoreWords": [],
+  "import": [],
+  "words": [
+    "attisdropped",
+    "attname",
+    "attnotnull",
+    "Attnum",
+    "attnums",
+    "attrelid",
+    "atttypid",
+    "atttypmod",
+    "classid",
+    "hashtext",
+    "healthcheck",
+    "NOWAIT",
+    "nspname",
+    "Oids",
+    "pg_isready",
+    "relkind",
+    "relname",
+    "relnamespace",
+    "retryably",
+    "timestamptz",
+    "Tombstoned",
+    "untokened",
+    "xact"
+  ]
+}

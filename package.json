@@ -1,0 +1,16 @@
+{
+  "name": "pg-logical-identity",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Deterministic logical identity tracking for Postgres tables and columns across renames and schema clones",
+  "scripts": {
+    "db:up": "docker compose up -d --wait",
+    "db:down": "docker compose down -v",
+    "test": "node --test test/*.test.js",
+    "test:full": "pnpm db:up && pnpm test"
+  },
+  "dependencies": {
+    "pg": "^8.12.0"
+  }
+}
