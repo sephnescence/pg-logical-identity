@@ -5,6 +5,10 @@ services:
       POSTGRES_PASSWORD: postgres
     ports:
       - "54329:5432"
+    volumes:
+      # Baked testing image: pg_dump snapshot (pnpm db:snapshot) restored on
+      # first boot. No data volume is declared, so `pnpm db:reset` re-runs it.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 1s

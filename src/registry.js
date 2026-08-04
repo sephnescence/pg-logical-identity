@@ -275,6 +275,55 @@ async function tableOid(db, schema, table) {
   return rows[0]?.oid ?? null;
 }
 
+// --- declared identity -----------------------------------------------------
+// A migration may declare an object's logical_id by writing it into the
+// object's catalog comment (COMMENT ON TABLE/COLUMN ... 'logical_id=<uuid>')
+// in the same migration that creates the object. syncFromCatalog reads it
+// back via obj_description/col_description when registering — the runner
+// still never parses SQL; the DDL declares identity into the catalog and the
+// catalog remains the single source of truth. The comment may carry other
+// prose around the marker. Applying one folder to many tenant schemas then
+// registers the SAME logical_id in each schema (as clones do), which is what
+// lets downstream tooling key per-column configuration on a stable id.
+
+const LOGICAL_ID_RE =
+  /\blogical_id=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i;
+
+async function declaredTableId(db, oid) {
+  const { rows } = await db.query(
+    `SELECT obj_description($1::oid, 'pg_class') AS comment`,
+    [oid],
+  );
+  return rows[0]?.comment?.match(LOGICAL_ID_RE)?.[1]?.toLowerCase() ?? null;
+}
+
+async function declaredColumnId(db, oid, attnum) {
+  const { rows } = await db.query(
+    `SELECT col_description($1::oid, $2) AS comment`,
+    [oid, attnum],
+  );
+  return rows[0]?.comment?.match(LOGICAL_ID_RE)?.[1]?.toLowerCase() ?? null;
+}
+
+// A declared id colliding with an existing registration in this schema is an
+// authoring bug (uuid reused across objects, or recycled from a tombstone) —
+// fail with the collision spelled out rather than a bare PK violation.
+async function assertDeclaredIdFree(db, schema, logicalId, what) {
+  const { rows } = await db.query(
+    `SELECT kind, table_name, column_name, dropped_at IS NOT NULL AS tombstoned
+     FROM identity_registry.objects
+     WHERE logical_id = $1 AND schema_name = $2`,
+    [logicalId, schema],
+  );
+  if (!rows.length) return;
+  const r = rows[0];
+  const holder = r.column_name ? `${r.table_name}.${r.column_name}` : r.table_name;
+  throw new Error(
+    `Declared logical_id ${logicalId} for ${what} is already registered in ` +
+      `${schema} by ${r.kind} ${holder}${r.tombstoned ? " (tombstoned)" : ""}`,
+  );
+}
+
 async function columnAttnum(db, oid, column) {
   const { rows } = await db.query(
     `SELECT attnum
@@ -496,10 +545,13 @@ export const ops = {
 
     for (const d of byStatus("untracked").filter((d) => d.kind === "table")) {
       const oid = await tableOid(c, schema, d.actual);
+      const declaredT = await declaredTableId(c, oid);
+      if (declaredT)
+        await assertDeclaredIdFree(c, schema, declaredT, `table ${d.actual}`);
       await c.query(
         `INSERT INTO identity_registry.objects (logical_id, kind, schema_name, table_name, table_oid)
          VALUES ($1, 'table', $2, $3, $4::oid)`,
-        [randomUUID(), schema, d.actual, oid],
+        [declaredT ?? randomUUID(), schema, d.actual, oid],
       );
       const { rows: cols } = await c.query(
         `SELECT attnum, attname FROM pg_attribute
@@ -508,11 +560,16 @@ export const ops = {
         [oid],
       );
       for (const col of cols) {
+        const declaredC = await declaredColumnId(c, oid, col.attnum);
+        if (declaredC)
+          await assertDeclaredIdFree(
+            c, schema, declaredC, `column ${d.actual}.${col.attname}`,
+          );
         await c.query(
           `INSERT INTO identity_registry.objects
              (logical_id, kind, schema_name, table_name, column_name, table_oid, attnum)
            VALUES ($1, 'column', $2, $3, $4, $5::oid, $6)`,
-          [randomUUID(), schema, d.actual, col.attname, oid, col.attnum],
+          [declaredC ?? randomUUID(), schema, d.actual, col.attname, oid, col.attnum],
         );
       }
       summary.registered.tables++;
@@ -528,11 +585,16 @@ export const ops = {
         [schema, d.tableOid],
       );
       const attnum = await columnAttnum(c, d.tableOid, d.actual);
+      const declared = await declaredColumnId(c, d.tableOid, attnum);
+      if (declared)
+        await assertDeclaredIdFree(
+          c, schema, declared, `column ${rows[0].table_name}.${d.actual}`,
+        );
       await c.query(
         `INSERT INTO identity_registry.objects
            (logical_id, kind, schema_name, table_name, column_name, table_oid, attnum)
          VALUES ($1, 'column', $2, $3, $4, $5::oid, $6)`,
-        [randomUUID(), schema, rows[0].table_name, d.actual, d.tableOid, attnum],
+        [declared ?? randomUUID(), schema, rows[0].table_name, d.actual, d.tableOid, attnum],
       );
       summary.registered.columns++;
     }

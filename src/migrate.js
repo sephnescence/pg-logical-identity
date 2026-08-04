@@ -3,13 +3,13 @@ import path from "node:path";
 import { assertOperable, ident, ops, withTx } from "./registry.js";
 
 // ---------------------------------------------------------------------------
-// ORM migration integration (drizzle-kit, prisma migrate)
+// ORM migration integration (drizzle-kit)
 //
-// Both tools generate plain SQL migration files, and this package never needs
-// to parse them. Each migration runs verbatim inside one gated transaction
-// with search_path pointed at the tenant schema, and the registry bookkeeping
-// is derived FROM THE CATALOG afterwards (ops.syncFromCatalog), still inside
-// that transaction:
+// drizzle-kit generates plain SQL migration files, and this package never
+// needs to parse them. Each migration runs verbatim inside one gated
+// transaction with search_path pointed at the tenant schema, and the registry
+// bookkeeping is derived FROM THE CATALOG afterwards (ops.syncFromCatalog),
+// still inside that transaction:
 //
 //   - CREATE TABLE / ADD COLUMN  -> untracked in the catalog -> registered
 //   - RENAME TABLE/COLUMN        -> same oid/attnum, new name -> identity healed
@@ -18,12 +18,23 @@ import { assertOperable, ident, ops, withTx } from "./registry.js";
 //     run through untouched
 //
 // The oid/attnum anchors do the heavy lifting: a real RENAME preserves them,
-// so identity survives without the runner understanding the SQL. The flip
-// side is that a tool emitting DROP + ADD for a rename (prisma does, unless
-// you hand-edit the migration) tombstones the old identity and mints a new
-// one — which is also exactly what the SQL said to do. drizzle-kit prompts
-// "renamed or new?" during generate and emits real RENAMEs, which is why it
-// is the better authoring fit.
+// so identity survives without the runner understanding the SQL. drizzle-kit
+// prompts "renamed or new?" during generate and emits real RENAMEs, which is
+// why it is the authoring tool here (prisma emits DROP + ADD for renames,
+// destroying identity unless hand-edited — support for it was removed).
+//
+// A migration may pin an object's logical_id by declaring it in the object's
+// catalog comment in the migration that creates it:
+//
+//   COMMENT ON TABLE "card" IS 'logical_id=<uuid>';
+//   COMMENT ON COLUMN "card"."name" IS 'logical_id=<uuid>';
+//
+// syncFromCatalog reads the comment back when registering (still catalog-
+// derived, never parsed from SQL) and uses the declared uuid instead of
+// minting one. One folder applied to many tenant schemas then registers the
+// SAME id in each — the anchor downstream tooling (admin-page codegen etc.)
+// keys per-object configuration on. Objects without a declaration keep the
+// minted-at-apply-time behaviour.
 //
 // Because the SQL is unqualified and the schema comes from search_path, one
 // generated migration folder applies to every tenant schema — applied state
@@ -40,24 +51,6 @@ export function loadDrizzleMigrations(folder) {
     .map((e) => ({
       name: e.tag,
       sql: fs.readFileSync(path.join(folder, `${e.tag}.sql`), "utf8"),
-    }));
-}
-
-// prisma folder: one <timestamp>_<name>/migration.sql per migration; the
-// timestamp prefix makes lexicographic order the application order.
-export function loadPrismaMigrations(folder) {
-  return fs
-    .readdirSync(folder, { withFileTypes: true })
-    .filter(
-      (d) =>
-        d.isDirectory() &&
-        fs.existsSync(path.join(folder, d.name, "migration.sql")),
-    )
-    .map((d) => d.name)
-    .sort()
-    .map((name) => ({
-      name,
-      sql: fs.readFileSync(path.join(folder, name, "migration.sql"), "utf8"),
     }));
 }
 

@@ -1,26 +1,20 @@
 import pg from "pg";
 import { bootstrap, verify } from "../src/registry.js";
-import {
-  applyMigrations,
-  loadDrizzleMigrations,
-  loadPrismaMigrations,
-} from "../src/migrate.js";
+import { applyMigrations, loadDrizzleMigrations } from "../src/migrate.js";
 
-// Apply a migrations folder to one tenant schema, then show what the
-// registry now knows — including the logical_ids, which are minted by
-// ops.syncFromCatalog() at apply time and never appear in the SQL files.
+// Apply a drizzle-format migrations folder to one tenant schema, then show
+// what the registry now knows — including the logical_ids, which are either
+// declared via COMMENT ON in the SQL or minted by ops.syncFromCatalog() at
+// apply time.
 //
-//   pnpm drizzle:migration:apply <folder> <schema>
-//   pnpm prisma:migration:apply  <folder> <schema>
+//   pnpm migration:apply <folder> <schema>
 //
 // Connection comes from DATABASE_URL, defaulting to the docker-compose
 // instance (pnpm db:up).
 
-const [format, folder, schema] = process.argv.slice(2);
-if (!["drizzle", "prisma"].includes(format) || !folder || !schema) {
-  console.error(
-    "usage: pnpm <drizzle|prisma>:migration:apply <folder> <schema>",
-  );
+const [folder, schema] = process.argv.slice(2);
+if (!folder || !schema) {
+  console.error("usage: pnpm migration:apply <folder> <schema>");
   process.exit(1);
 }
 
@@ -31,10 +25,7 @@ const pool = new pg.Pool({ connectionString: url, max: 2 });
 
 try {
   await bootstrap(pool);
-  const migrations =
-    format === "drizzle"
-      ? loadDrizzleMigrations(folder)
-      : loadPrismaMigrations(folder);
+  const migrations = loadDrizzleMigrations(folder);
   console.log(`Applying ${migrations.length} migration(s) to schema "${schema}"\n`);
 
   const results = await applyMigrations(pool, { schema, migrations });

@@ -67,16 +67,15 @@ await reconcile(pool, 'test_tenant');               // adopts catalog names for 
 `drop_column`, `drop_table`. Each event is atomic; a failed batch throws with
 `failedIndex` so the worker can resume from that event after fixing the cause.
 
-## ORM migrations (drizzle-kit / prisma migrate)
+## ORM migrations (drizzle-kit)
 
-`src/migrate.js` integrates ORM-generated SQL migrations without parsing
+`src/migrate.js` integrates drizzle-kit's SQL migrations without parsing
 them. Each migration runs verbatim inside one gated transaction with
 `search_path` set to the tenant schema; afterwards — still inside that
 transaction — `ops.syncFromCatalog()` derives the registry bookkeeping from
 the catalog itself:
 
 - `CREATE TABLE` / `ADD COLUMN` → untracked in the catalog → **registered**
-  (fresh logical_ids)
 - `RENAME TABLE/COLUMN` → same oid/attnum, new name → **identity healed**
 - `DROP TABLE/COLUMN` → tracked identity missing → **tombstoned**
 - indexes, constraints, defaults, backfills → no identity effect, run through
@@ -85,28 +84,42 @@ the catalog itself:
 So a migration that creates a table *cannot forget* to add the registry rows
 — they are computed from what the DDL actually did, atomically with it. The
 oid/attnum anchors do the heavy lifting: a real `RENAME` preserves them, so
-identity survives without the runner understanding the SQL.
+identity survives without the runner understanding the SQL. (Prisma support
+was removed: `prisma migrate` emits `DROP` + `ADD` for renames, which
+destroys identity unless every generated migration is hand-edited;
+drizzle-kit asks "renamed or new?" at generate time and emits real
+`RENAME`s.)
+
+A migration can pin logical ids instead of having them minted at apply time,
+by declaring them into the catalog in the migration that creates the object:
+
+```sql
+COMMENT ON TABLE "card" IS 'logical_id=86b4485c-391c-4615-8fe5-49ab9b2603e7';
+COMMENT ON COLUMN "card"."name" IS 'logical_id=82c9838d-df66-4b25-a03b-64b81305c35e';
+```
+
+`syncFromCatalog()` reads the declaration back via `obj_description`/
+`col_description` (catalog-derived, never parsed from SQL) and registers the
+declared uuid verbatim — the same id in every tenant schema the folder is
+applied to, stable across environments and dump/restore. That id is the
+anchor downstream tooling (e.g. admin-page codegen keying display config per
+column) can rely on. See [docs/migrations.md](docs/migrations.md).
 
 ```js
 import { applyMigrations, loadDrizzleMigrations } from './src/migrate.js';
 
-const migrations = loadDrizzleMigrations('./drizzle');   // or loadPrismaMigrations('./prisma/migrations')
+const migrations = loadDrizzleMigrations('./drizzle');
 for (const schema of tenantSchemas) {
   await applyMigrations(pool, { schema, migrations });   // per-tenant applied-state
 }
 ```
 
-Four pnpm commands (named tool-first: `<tool>:migration:<verb>`) wrap this
-for hand-authored migrations (see
-[docs/migrations.md](docs/migrations.md) for full end-to-end walkthroughs,
-including where logical ids come from — they are minted at apply time by
-`syncFromCatalog`, never written in the SQL):
+Two pnpm commands wrap this for hand-authored migrations (see
+[docs/migrations.md](docs/migrations.md) for full end-to-end walkthroughs):
 
 ```bash
-pnpm drizzle:migration:new add_users                 # scaffold drizzle/0000_add_users.sql + journal entry
-pnpm prisma:migration:new  add_users                 # scaffold prisma/migrations/<ts>_add_users/migration.sql
-pnpm drizzle:migration:apply ./drizzle demo_tenant   # apply + print the minted registry
-pnpm prisma:migration:apply  ./prisma/migrations demo_tenant
+pnpm migration:new add_users                 # scaffold drizzle/0000_add_users.sql + journal entry
+pnpm migration:apply ./drizzle demo_tenant   # apply + print the resulting registry
 ```
 
 Because the generated SQL is unqualified and the schema comes from
@@ -115,15 +128,6 @@ state is tracked per `(schema, migration)` in `identity_registry.migrations`,
 so re-runs skip and a failed batch resumes from the failed migration
 (`err.failedIndex`), exactly like `applyEvents`. `beginMigration()` tokens
 gate `applyMigrations` the same way they gate events.
-
-**Recommendation: drizzle.** `drizzle-kit generate` asks "renamed or new?"
-and emits real `RENAME` statements, which is precisely what preserves
-identity here. Prisma emits `DROP` + `ADD` for a rename unless you hand-edit
-the generated `migration.sql` — with the drop-shaped SQL, the old identity is
-tombstoned and a new one minted, which is faithfully what that SQL says, but
-not usually what you meant. Both folder formats load with zero extra
-dependencies (`meta/_journal.json` for drizzle, `<timestamp>_<name>/migration.sql`
-for prisma); drizzle just makes the identity-preserving path the default.
 
 ## Layering: ops (mechanism) vs events (policy)
 
