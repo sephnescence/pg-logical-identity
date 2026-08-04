@@ -96,6 +96,19 @@ for (const schema of tenantSchemas) {
 }
 ```
 
+Four pnpm commands (named tool-first: `<tool>:migration:<verb>`) wrap this
+for hand-authored migrations (see
+[docs/migrations.md](docs/migrations.md) for full end-to-end walkthroughs,
+including where logical ids come from — they are minted at apply time by
+`syncFromCatalog`, never written in the SQL):
+
+```bash
+pnpm drizzle:migration:new add_users                 # scaffold drizzle/0000_add_users.sql + journal entry
+pnpm prisma:migration:new  add_users                 # scaffold prisma/migrations/<ts>_add_users/migration.sql
+pnpm drizzle:migration:apply ./drizzle demo_tenant   # apply + print the minted registry
+pnpm prisma:migration:apply  ./prisma/migrations demo_tenant
+```
+
 Because the generated SQL is unqualified and the schema comes from
 `search_path`, one migrations folder applies to every tenant schema; applied
 state is tracked per `(schema, migration)` in `identity_registry.migrations`,

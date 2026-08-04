@@ -7,6 +7,10 @@
   "scripts": {
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down -v",
+    "drizzle:migration:new": "node scripts/new-migration.js drizzle",
+    "drizzle:migration:apply": "node scripts/apply-migrations.js drizzle",
+    "prisma:migration:new": "node scripts/new-migration.js prisma",
+    "prisma:migration:apply": "node scripts/apply-migrations.js prisma",
     "test": "NODE_OPTIONS='--experimental-vm-modules --disable-warning=ExperimentalWarning' jest",
     "test:full": "pnpm db:up && pnpm test"
   },
