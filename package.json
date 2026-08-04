@@ -3,6 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@10.20.0",
   "description": "Deterministic logical identity tracking for Postgres tables and columns across renames and schema clones",
   "scripts": {
     "db:up": "docker compose up -d --wait",

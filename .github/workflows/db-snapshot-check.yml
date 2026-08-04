@@ -1,0 +1,184 @@
+# Reusable drift check for the baked database snapshot (db/init/testdb.sql).
+#
+# Regenerates the snapshot from the migrations + seed, then compares it to the
+# committed one in NORMALIZED form. Regenerating is nondeterministic on
+# purpose (minted logical_id uuids, applied_at/created_at timestamps,
+# per-database table oids, pg_dump \restrict session tokens), so a byte diff
+# would always fire; the normalizer masks exactly those fields — inside
+# identity_registry COPY blocks only — and leaves the tenant DDL and seed data
+# byte-for-byte, so real schema/seed drift is still caught.
+#
+# On drift, opens (or updates) a PR carrying the regenerated snapshot.
+#
+# Call from any repo that follows the same snapshot layout:
+#
+#   jobs:
+#     snapshot:
+#       permissions:
+#         contents: write
+#         pull-requests: write
+#       uses: sephnescence/pg-logical-identity/.github/workflows/db-snapshot-check.yml@main
+#
+# Requires "Allow GitHub Actions to create and approve pull requests" in the
+# caller repo (Settings → Actions → General → Workflow permissions).
+
+name: DB snapshot check
+
+on:
+  workflow_call:
+    inputs:
+      snapshot-path:
+        description: Repo-relative path of the committed snapshot
+        type: string
+        default: db/init/testdb.sql
+      install-command:
+        description: Dependency install command
+        type: string
+        default: pnpm install --frozen-lockfile
+      db-up-command:
+        description: Command that starts the database the snapshot script dumps from
+        type: string
+        default: pnpm db:up
+      snapshot-command:
+        description: Command that regenerates the snapshot in place
+        type: string
+        default: pnpm db:snapshot
+      node-version:
+        description: Node.js version
+        type: string
+        default: "22"
+      pr-branch:
+        description: Branch the fix PR is opened from
+        type: string
+        default: db-snapshot/refresh
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: ${{ inputs.install-command }}
+
+      - name: Start database
+        run: ${{ inputs.db-up-command }}
+
+      - name: Regenerate snapshot
+        run: ${{ inputs.snapshot-command }}
+
+      - name: Write snapshot normalizer
+        run: |
+          cat > "$RUNNER_TEMP/normalize-snapshot.cjs" <<'NORMALIZE_EOF'
+          // Normalize a pg_dump snapshot so two regenerations of the same
+          // logical content compare equal. Strips pg_dump session tokens and
+          // version lines; inside identity_registry COPY blocks replaces
+          // minted UUIDs, timestamps, and per-database table_oid values.
+          // Everything else (tenant DDL, seed data) is left byte-for-byte so
+          // real drift is still detected.
+          const fs = require("node:fs");
+
+          const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+          const TS = /\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?([+-]\d{2}(:\d{2})?)?/g;
+
+          const src = fs.readFileSync(process.argv[2], "utf8");
+          const out = [];
+          let registryCopy = false; // inside a COPY identity_registry.* block
+          let oidField = -1; // index of table_oid within that block's columns
+
+          for (const line of src.split("\n")) {
+            if (/^\\(un)?restrict\s/.test(line)) continue;
+            if (/^-- Dumped (from database|by pg_dump) version/.test(line)) continue;
+
+            const copy = line.match(/^COPY\s+(\S+)\s+\(([^)]*)\)\s+FROM stdin;$/);
+            if (copy) {
+              registryCopy = copy[1].startsWith("identity_registry.");
+              oidField = registryCopy
+                ? copy[2].split(",").map((s) => s.trim()).indexOf("table_oid")
+                : -1;
+              out.push(line);
+              continue;
+            }
+            if (line === "\\.") {
+              registryCopy = false;
+              oidField = -1;
+              out.push(line);
+              continue;
+            }
+
+            if (registryCopy) {
+              const fields = line.split("\t");
+              if (oidField >= 0 && fields.length > oidField) fields[oidField] = "<oid>";
+              out.push(
+                fields.join("\t").replace(UUID, "<uuid>").replace(TS, "<timestamp>"),
+              );
+            } else {
+              out.push(line);
+            }
+          }
+
+          process.stdout.write(out.join("\n"));
+          NORMALIZE_EOF
+
+      - name: Detect drift
+        id: drift
+        env:
+          SNAPSHOT_PATH: ${{ inputs.snapshot-path }}
+        run: |
+          set -euo pipefail
+          # First run in a repo: no committed snapshot yet -> empty baseline,
+          # which always diffs against the regenerated file -> PR opens.
+          git show "HEAD:$SNAPSHOT_PATH" > "$RUNNER_TEMP/committed.sql" 2>/dev/null \
+            || : > "$RUNNER_TEMP/committed.sql"
+          node "$RUNNER_TEMP/normalize-snapshot.cjs" "$RUNNER_TEMP/committed.sql" > "$RUNNER_TEMP/committed.norm"
+          node "$RUNNER_TEMP/normalize-snapshot.cjs" "$SNAPSHOT_PATH" > "$RUNNER_TEMP/regenerated.norm"
+
+          if diff -u --label committed "$RUNNER_TEMP/committed.norm" \
+                     --label regenerated "$RUNNER_TEMP/regenerated.norm" \
+                     > "$RUNNER_TEMP/snapshot.diff"; then
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+            # Discard the regeneration churn (re-minted uuids, timestamps) so
+            # the working tree is clean again.
+            git checkout -- "$SNAPSHOT_PATH"
+            echo "Snapshot is up to date." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "drift=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Snapshot drift detected"
+              echo
+              echo '```diff'
+              head -c 60000 "$RUNNER_TEMP/snapshot.diff"
+              echo
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Open PR with refreshed snapshot
+        if: steps.drift.outputs.drift == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          add-paths: ${{ inputs.snapshot-path }}
+          branch: ${{ inputs.pr-branch }}
+          delete-branch: true
+          commit-message: "chore: refresh database snapshot"
+          title: "chore: refresh database snapshot"
+          body: |
+            The committed snapshot at `${{ inputs.snapshot-path }}` no longer
+            matches what the migrations and seed produce. This PR carries a
+            freshly regenerated snapshot.
+
+            The uuid/timestamp churn in the diff is expected — logical_ids are
+            re-minted on regeneration. The normalized diff that triggered this
+            PR is in the [workflow run summary](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
+
+            Auto-generated by the `DB snapshot check` workflow.

@@ -1,0 +1,20 @@
+# Runs the snapshot drift check on every push (no PR gate yet). On drift it
+# opens a PR with the regenerated db/init/testdb.sql. Merging that PR pushes
+# to main, which re-runs this check and comes back clean — no loop.
+name: Database snapshot
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: db-snapshot-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: ./.github/workflows/db-snapshot-check.yml
