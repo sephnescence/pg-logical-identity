@@ -1,11 +1,10 @@
-import { test, before, after } from 'node:test';
-import assert from 'node:assert/strict';
+import { test, beforeAll, afterAll, expect } from '@jest/globals';
 import { Fixture } from './helpers/fixture.js';
 import { ops, getByLogicalId, verify } from '../src/registry.js';
 
 const f = new Fixture(import.meta.url);
-before(() => f.setup());
-after(() => f.teardown());
+beforeAll(() => f.setup());
+afterAll(() => f.teardown());
 
 test('renaming a table there and back preserves identity throughout', async () => {
   const ids = await f.seedTenant();
@@ -13,15 +12,15 @@ test('renaming a table there and back preserves identity throughout', async () =
 
   await f.run(ops.renameTable, { schema: f.schema, from: 'test_table', to: 'renamed_table' });
   const mid = await getByLogicalId(f.pool, ids.tableId, f.schema);
-  assert.equal(mid.table_name, 'renamed_table');
-  assert.equal(mid.table_oid, original.table_oid);
+  expect(mid.table_name).toBe('renamed_table');
+  expect(mid.table_oid).toBe(original.table_oid);
 
   await f.run(ops.renameTable, { schema: f.schema, from: 'renamed_table', to: 'test_table' });
   const back = await getByLogicalId(f.pool, ids.tableId, f.schema);
-  assert.equal(back.table_name, 'test_table', 'round trip restores the original name');
-  assert.equal(back.table_oid, original.table_oid, 'oid stable across both renames');
+  expect(back.table_name).toBe('test_table'); // round trip restores the original name
+  expect(back.table_oid).toBe(original.table_oid); // oid stable across both renames
 
   const colRow = await getByLogicalId(f.pool, ids.columnIds.test_column, f.schema);
-  assert.equal(colRow.table_name, 'test_table', 'column rows follow both renames');
-  assert.equal((await verify(f.pool, f.schema)).ok, true);
+  expect(colRow.table_name).toBe('test_table'); // column rows follow both renames
+  expect((await verify(f.pool, f.schema)).ok).toBe(true);
 });

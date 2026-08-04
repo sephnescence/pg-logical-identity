@@ -1,11 +1,10 @@
-import { test, before, after } from 'node:test';
-import assert from 'node:assert/strict';
+import { test, beforeAll, afterAll, expect } from '@jest/globals';
 import { Fixture } from './helpers/fixture.js';
 import { ops, verify } from '../src/registry.js';
 
 const f = new Fixture(import.meta.url);
-before(() => f.setup());
-after(() => f.teardown());
+beforeAll(() => f.setup());
+afterAll(() => f.teardown());
 
 test('out-of-band table rename is detected by oid and healed', async () => {
   const ids = await f.seedTenant();
@@ -13,7 +12,7 @@ test('out-of-band table rename is detected by oid and healed', async () => {
 
   const report = await verify(f.pool, f.schema);
   const tableDrift = report.drift.find((d) => d.kind === 'table');
-  assert.deepEqual(tableDrift, {
+  expect(tableDrift).toEqual({
     logicalId: ids.tableId,
     kind: 'table',
     status: 'renamed',
@@ -22,6 +21,6 @@ test('out-of-band table rename is detected by oid and healed', async () => {
   });
 
   const { healed } = await f.run(ops.reconcile, { schema: f.schema });
-  assert.ok(healed >= 1);
-  assert.equal((await verify(f.pool, f.schema)).ok, true);
+  expect(healed >= 1).toBeTruthy();
+  expect((await verify(f.pool, f.schema)).ok).toBe(true);
 });

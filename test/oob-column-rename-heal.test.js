@@ -1,19 +1,18 @@
-import { test, before, after } from 'node:test';
-import assert from 'node:assert/strict';
+import { test, beforeAll, afterAll, expect } from '@jest/globals';
 import { Fixture } from './helpers/fixture.js';
 import { ops, verify, getByLogicalId } from '../src/registry.js';
 
 const f = new Fixture(import.meta.url);
-before(() => f.setup());
-after(() => f.teardown());
+beforeAll(() => f.setup());
+afterAll(() => f.teardown());
 
 test('out-of-band column rename is detected by identity and healed', async () => {
   const ids = await f.seedTenant();
   await f.pool.query(`ALTER TABLE ${f.schema}.test_table RENAME COLUMN test_column TO sneaky`);
 
   const report = await verify(f.pool, f.schema);
-  assert.equal(report.ok, false);
-  assert.deepEqual(report.drift, [{
+  expect(report.ok).toBe(false);
+  expect(report.drift).toEqual([{
     logicalId: ids.columnIds.test_column,
     kind: 'column',
     status: 'renamed',
@@ -23,12 +22,10 @@ test('out-of-band column rename is detected by identity and healed', async () =>
   }]);
 
   const { healed, remaining } = await f.run(ops.reconcile, { schema: f.schema });
-  assert.equal(healed, 1);
-  assert.deepEqual(remaining, []);
-  assert.equal((await verify(f.pool, f.schema)).ok, true);
-  assert.equal(
-    (await getByLogicalId(f.pool, ids.columnIds.test_column, f.schema)).column_name,
-    'sneaky',
-    'registry adopted the catalog name — same logical id throughout',
-  );
+  expect(healed).toBe(1);
+  expect(remaining).toEqual([]);
+  expect((await verify(f.pool, f.schema)).ok).toBe(true);
+  // registry adopted the catalog name — same logical id throughout
+  expect((await getByLogicalId(f.pool, ids.columnIds.test_column, f.schema)).column_name)
+    .toBe('sneaky');
 });

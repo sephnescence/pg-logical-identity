@@ -1,11 +1,10 @@
-import { test, before, after } from 'node:test';
-import assert from 'node:assert/strict';
+import { test, beforeAll, afterAll, expect } from '@jest/globals';
 import { Fixture } from './helpers/fixture.js';
 import { exportSchema, importSchema, renameColumn, getByLogicalId, verify } from '../src/registry.js';
 
 const f = new Fixture(import.meta.url);
-before(() => f.setup());
-after(() => f.teardown());
+beforeAll(() => f.setup());
+afterAll(() => f.teardown());
 
 test('the imported schema evolves independently under the same logical ids', async () => {
   const ids = await f.seedExportScenario();
@@ -18,7 +17,7 @@ test('the imported schema evolves independently under the same logical ids', asy
   });
   const dst = await getByLogicalId(target, ids.columnIds.test_column, f.schema);
   const src = await getByLogicalId(f.pool, ids.columnIds.test_column, f.schema);
-  assert.equal(dst.column_name, 'imported_name');
-  assert.equal(src.column_name, 'test_column', 'source database untouched');
-  assert.equal((await verify(target, f.schema)).ok, true);
+  expect(dst.column_name).toBe('imported_name');
+  expect(src.column_name).toBe('test_column'); // source database untouched
+  expect((await verify(target, f.schema)).ok).toBe(true);
 });

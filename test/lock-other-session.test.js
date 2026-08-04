@@ -1,11 +1,10 @@
-import { test, before, after } from 'node:test';
-import assert from 'node:assert/strict';
+import { test, beforeAll, afterAll, expect } from '@jest/globals';
 import { Fixture } from './helpers/fixture.js';
 import { addColumn, verify } from '../src/registry.js';
 
 const f = new Fixture(import.meta.url);
-before(() => f.setup());
-after(() => f.teardown());
+beforeAll(() => f.setup());
+afterAll(() => f.teardown());
 
 test('events are refused while another worker session owns the schema', async () => {
   await f.seedTenant();
@@ -14,10 +13,9 @@ test('events are refused while another worker session owns the schema', async ()
   const other = await f.pool.connect();
   try {
     await other.query(`SELECT pg_advisory_lock(421001, hashtext($1))`, [f.schema]);
-    await assert.rejects(
+    await expect(
       addColumn(f.pool, { schema: f.schema, table: 'test_table', name: 'x', type: 'text' }),
-      /owned by another worker session/,
-    );
+    ).rejects.toThrow(/owned by another worker session/);
     await other.query(`SELECT pg_advisory_unlock(421001, hashtext($1))`, [f.schema]);
   } finally {
     other.release();
@@ -26,6 +24,6 @@ test('events are refused while another worker session owns the schema', async ()
   const { logicalId } = await addColumn(f.pool, {
     schema: f.schema, table: 'test_table', name: 'x', type: 'text',
   });
-  assert.ok(logicalId);
-  assert.equal((await verify(f.pool, f.schema)).ok, true);
+  expect(logicalId).toBeTruthy();
+  expect((await verify(f.pool, f.schema)).ok).toBe(true);
 });

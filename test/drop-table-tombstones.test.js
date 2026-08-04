@@ -1,11 +1,10 @@
-import { test, before, after } from 'node:test';
-import assert from 'node:assert/strict';
+import { test, beforeAll, afterAll, expect } from '@jest/globals';
 import { Fixture } from './helpers/fixture.js';
 import { ops, verify } from '../src/registry.js';
 
 const f = new Fixture(import.meta.url);
-before(() => f.setup());
-after(() => f.teardown());
+beforeAll(() => f.setup());
+afterAll(() => f.teardown());
 
 test('dropTable tombstones the table and all its columns', async () => {
   await f.seedTenant();
@@ -16,6 +15,6 @@ test('dropTable tombstones the table and all its columns', async () => {
      WHERE schema_name = $1 AND table_name = 'test_table' AND dropped_at IS NULL`,
     [f.schema],
   );
-  assert.equal(rows[0].n, 0);
-  assert.equal((await verify(f.pool, f.schema)).ok, true);
+  expect(rows[0].n).toBe(0);
+  expect((await verify(f.pool, f.schema)).ok).toBe(true);
 });

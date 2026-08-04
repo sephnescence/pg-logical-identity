@@ -45,6 +45,7 @@
     "relname",
     "relnamespace",
     "retryably",
+    "teardown",
     "timestamptz",
     "Tombstoned",
     "untokened",

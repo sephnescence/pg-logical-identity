@@ -11,13 +11,13 @@ const slugFrom = (metaUrl) => path.basename(fileURLToPath(metaUrl))
   .replaceAll(/[^a-zA-Z0-9]+/g, '_')
   .toLowerCase();
 
-// Shared setup/teardown for the one-test-per-file suites. node:test has no
-// class-based suites, so this fixture plays the parent-class role: each file
-// creates one instance from its own import.meta.url, runs setup() in before()
-// and teardown() in after(), then builds the scenario it needs.
+// Shared setup/teardown for the one-test-per-file suites: each file creates
+// one instance from its own import.meta.url, runs setup() in beforeAll() and
+// teardown() in afterAll(), then builds the scenario it needs.
 //
 // Every file gets schema/database names derived from its filename, so files
-// never touch each other's objects and the suite runs fully in parallel. The
+// never touch each other's objects and Jest's parallel workers never
+// conflict. The
 // registry itself is shared (as in production — many tenant schemas, one
 // registry); setup() only clears this file's rows from it.
 //

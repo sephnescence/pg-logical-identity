@@ -1,11 +1,10 @@
-import { test, before, after } from 'node:test';
-import assert from 'node:assert/strict';
+import { test, beforeAll, afterAll, expect } from '@jest/globals';
 import { Fixture } from './helpers/fixture.js';
 import { ops, getByLogicalId, verify } from '../src/registry.js';
 
 const f = new Fixture(import.meta.url);
-before(() => f.setup());
-after(() => f.teardown());
+beforeAll(() => f.setup());
+afterAll(() => f.teardown());
 
 test('renames diverge per clone while logical identity stays shared', async () => {
   const ids = await f.seedTenant();
@@ -17,8 +16,8 @@ test('renames diverge per clone while logical identity stays shared', async () =
 
   const src = await getByLogicalId(f.pool, ids.columnIds.test_column, f.schema);
   const dst = await getByLogicalId(f.pool, ids.columnIds.test_column, f.clone);
-  assert.equal(src.column_name, 'test_column', 'source untouched');
-  assert.equal(dst.column_name, 'clone_name', 'clone renamed');
-  assert.equal((await verify(f.pool, f.schema)).ok, true);
-  assert.equal((await verify(f.pool, f.clone)).ok, true);
+  expect(src.column_name).toBe('test_column'); // source untouched
+  expect(dst.column_name).toBe('clone_name'); // clone renamed
+  expect((await verify(f.pool, f.schema)).ok).toBe(true);
+  expect((await verify(f.pool, f.clone)).ok).toBe(true);
 });

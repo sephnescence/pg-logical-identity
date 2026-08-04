@@ -1,11 +1,10 @@
-import { test, before, after } from 'node:test';
-import assert from 'node:assert/strict';
+import { test, beforeAll, afterAll, expect } from '@jest/globals';
 import { Fixture } from './helpers/fixture.js';
 import { applyEvents, beginMigration, verify } from '../src/registry.js';
 
 const f = new Fixture(import.meta.url, { workers: 3 });
-before(() => f.setup());
-after(() => f.teardown());
+beforeAll(() => f.setup());
+afterAll(() => f.teardown());
 
 test('one worker thread per schema migrates many schemas in parallel', async () => {
   const schemas = f.workers;
@@ -24,12 +23,12 @@ test('one worker thread per schema migrates many schemas in parallel', async () 
     }
   }));
 
-  assert.equal(results.length, 3);
+  expect(results.length).toBe(3);
   for (const schema of schemas) {
-    assert.equal((await verify(f.pool, schema)).ok, true, `${schema} verifies clean`);
+    expect((await verify(f.pool, schema)).ok).toBe(true);
     const { rows } = await f.pool.query(
       `SELECT state FROM identity_registry.control WHERE schema_name = $1`, [schema],
     );
-    assert.equal(rows[0].state, 'idle', `${schema} lock released`);
+    expect(rows[0].state).toBe('idle');
   }
 });

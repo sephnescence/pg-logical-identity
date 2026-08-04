@@ -1,11 +1,10 @@
-import { test, before, after } from 'node:test';
-import assert from 'node:assert/strict';
+import { test, beforeAll, afterAll, expect } from '@jest/globals';
 import { Fixture } from './helpers/fixture.js';
 import { ops, getByLogicalId, verify } from '../src/registry.js';
 
 const f = new Fixture(import.meta.url);
-before(() => f.setup());
-after(() => f.teardown());
+beforeAll(() => f.setup());
+afterAll(() => f.teardown());
 
 test('dropColumn tombstones the registry row and the catalog attnum', async () => {
   await f.seedTenant();
@@ -15,12 +14,12 @@ test('dropColumn tombstones the registry row and the catalog attnum', async () =
   await f.run(ops.dropColumn, { schema: f.schema, table: 'test_table', name: 'extra_col' });
 
   const row = await getByLogicalId(f.pool, logicalId, f.schema);
-  assert.notEqual(row.dropped_at, null);
+  expect(row.dropped_at).not.toBe(null);
 
   const { rows } = await f.pool.query(
     `SELECT attisdropped FROM pg_attribute WHERE attrelid = $1::oid AND attnum = 2`,
     [row.table_oid],
   );
-  assert.equal(rows[0].attisdropped, true, 'catalog keeps a tombstone at attnum 2');
-  assert.equal((await verify(f.pool, f.schema)).ok, true, 'dropped rows are excluded from verify');
+  expect(rows[0].attisdropped).toBe(true); // catalog keeps a tombstone at attnum 2
+  expect((await verify(f.pool, f.schema)).ok).toBe(true); // dropped rows are excluded from verify
 });

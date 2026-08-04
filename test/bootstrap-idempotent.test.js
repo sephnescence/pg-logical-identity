@@ -1,11 +1,10 @@
-import { test, before, after } from 'node:test';
-import assert from 'node:assert/strict';
+import { test, beforeAll, afterAll, expect } from '@jest/globals';
 import { Fixture } from './helpers/fixture.js';
 import { bootstrap } from '../src/registry.js';
 
 const f = new Fixture(import.meta.url);
-before(() => f.setup());
-after(() => f.teardown());
+beforeAll(() => f.setup());
+afterAll(() => f.teardown());
 
 test('bootstrap is idempotent', async () => {
   // setup() already bootstrapped once — a second run must be a no-op
@@ -16,5 +15,5 @@ test('bootstrap is idempotent', async () => {
     `SELECT count(*)::int AS n FROM identity_registry.objects WHERE schema_name = $1`,
     [f.schema],
   );
-  assert.equal(rows[0].n, 0);
+  expect(rows[0].n).toBe(0);
 });

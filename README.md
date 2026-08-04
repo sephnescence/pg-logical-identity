@@ -163,12 +163,12 @@ pg_dump under the same lock protocol and use the bundle for identity rows.
 ## Test layout
 
 One test case per file under `test/`, named after the invariant it pins down,
-and the files run **in parallel**. `test/helpers/fixture.js` plays the
-parent-class role (node:test has no class-based suites): each file
-instantiates a `Fixture` from its own `import.meta.url`, runs `setup()` /
-`teardown()` in its `before`/`after` hooks, and builds its own scenario from
-the seed helpers (`seedTenant`, `seedExportScenario`, `createTargetDb`) — no
-test depends on state left behind by another.
+and the files run **in parallel** across Jest's workers. Each file
+instantiates a `Fixture` (from `test/helpers/fixture.js`) with its own
+`import.meta.url`, runs `setup()` / `teardown()` in its
+`beforeAll`/`afterAll` hooks, and builds its own scenario from the seed
+helpers (`seedTenant`, `seedExportScenario`, `createTargetDb`) — no test
+depends on state left behind by another.
 
 Parallelism works because every file gets schema/database names derived from
 its filename, so files never touch each other's objects; the registry itself
