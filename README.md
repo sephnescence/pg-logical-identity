@@ -67,6 +67,51 @@ await reconcile(pool, 'test_tenant');               // adopts catalog names for 
 `drop_column`, `drop_table`. Each event is atomic; a failed batch throws with
 `failedIndex` so the worker can resume from that event after fixing the cause.
 
+## ORM migrations (drizzle-kit / prisma migrate)
+
+`src/migrate.js` integrates ORM-generated SQL migrations without parsing
+them. Each migration runs verbatim inside one gated transaction with
+`search_path` set to the tenant schema; afterwards — still inside that
+transaction — `ops.syncFromCatalog()` derives the registry bookkeeping from
+the catalog itself:
+
+- `CREATE TABLE` / `ADD COLUMN` → untracked in the catalog → **registered**
+  (fresh logical_ids)
+- `RENAME TABLE/COLUMN` → same oid/attnum, new name → **identity healed**
+- `DROP TABLE/COLUMN` → tracked identity missing → **tombstoned**
+- indexes, constraints, defaults, backfills → no identity effect, run through
+  untouched
+
+So a migration that creates a table *cannot forget* to add the registry rows
+— they are computed from what the DDL actually did, atomically with it. The
+oid/attnum anchors do the heavy lifting: a real `RENAME` preserves them, so
+identity survives without the runner understanding the SQL.
+
+```js
+import { applyMigrations, loadDrizzleMigrations } from './src/migrate.js';
+
+const migrations = loadDrizzleMigrations('./drizzle');   // or loadPrismaMigrations('./prisma/migrations')
+for (const schema of tenantSchemas) {
+  await applyMigrations(pool, { schema, migrations });   // per-tenant applied-state
+}
+```
+
+Because the generated SQL is unqualified and the schema comes from
+`search_path`, one migrations folder applies to every tenant schema; applied
+state is tracked per `(schema, migration)` in `identity_registry.migrations`,
+so re-runs skip and a failed batch resumes from the failed migration
+(`err.failedIndex`), exactly like `applyEvents`. `beginMigration()` tokens
+gate `applyMigrations` the same way they gate events.
+
+**Recommendation: drizzle.** `drizzle-kit generate` asks "renamed or new?"
+and emits real `RENAME` statements, which is precisely what preserves
+identity here. Prisma emits `DROP` + `ADD` for a rename unless you hand-edit
+the generated `migration.sql` — with the drop-shaped SQL, the old identity is
+tombstoned and a new one minted, which is faithfully what that SQL says, but
+not usually what you meant. Both folder formats load with zero extra
+dependencies (`meta/_journal.json` for drizzle, `<timestamp>_<name>/migration.sql`
+for prisma); drizzle just makes the identity-preserving path the default.
+
 ## Layering: ops (mechanism) vs events (policy)
 
 Each change exists at two layers:

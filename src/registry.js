@@ -80,6 +80,12 @@ export async function bootstrap(pool) {
       locked_by   text,
       locked_at   timestamptz
     );
+    CREATE TABLE IF NOT EXISTS identity_registry.migrations (
+      schema_name text NOT NULL,
+      name        text NOT NULL,
+      applied_at  timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (schema_name, name)
+    );
     `);
   });
 }
@@ -147,7 +153,9 @@ async function lockControlRow(client, schema) {
   }
 }
 
-async function assertOperable(client, schema, lockToken) {
+// Exported for callers that compose ops inside their own transaction (e.g.
+// the migration runner in migrate.js): enter the schema's gate first, then run.
+export async function assertOperable(client, schema, lockToken) {
   const { state, lock_token } = await lockControlRow(client, schema);
   if (state === "migrating") {
     if (lockToken && lockToken === lock_token) return;
@@ -447,6 +455,91 @@ export const ops = {
     };
   },
 
+  // Adopt EVERY catalog difference as intentional: heal renames (identity
+  // matched by oid/attnum), tombstone missing objects, and register untracked
+  // ones under fresh logical_ids. Where reconcile is conservative (out-of-band
+  // drift needs a human), this is the trusting variant for callers that just
+  // ran DDL under the gate in this same transaction — an ORM-generated
+  // migration, say — where every difference is by definition caused by that
+  // DDL. Order matters for the live-name unique index: tombstones free names
+  // before renames adopt them, and both run before new registrations.
+  async syncFromCatalog(c, { schema }) {
+    const report = await verify(c, schema);
+    const byStatus = (s) => report.drift.filter((d) => d.status === s);
+    const summary = { healed: 0, tombstoned: 0, registered: { tables: 0, columns: 0 } };
+
+    for (const d of byStatus("missing")) {
+      await c.query(
+        `UPDATE identity_registry.objects SET dropped_at = now(), updated_at = now()
+         WHERE logical_id = $1 AND schema_name = $2 AND dropped_at IS NULL`,
+        [d.logicalId, schema],
+      );
+      summary.tombstoned++;
+    }
+
+    for (const d of byStatus("renamed")) {
+      if (d.kind === "table") {
+        await c.query(
+          `UPDATE identity_registry.objects SET table_name = $1, updated_at = now()
+           WHERE schema_name = $2 AND table_name = $3 AND dropped_at IS NULL`,
+          [d.actual, schema, d.expected],
+        );
+      } else {
+        await c.query(
+          `UPDATE identity_registry.objects SET column_name = $1, updated_at = now()
+           WHERE logical_id = $2 AND schema_name = $3`,
+          [d.actual, d.logicalId, schema],
+        );
+      }
+      summary.healed++;
+    }
+
+    for (const d of byStatus("untracked").filter((d) => d.kind === "table")) {
+      const oid = await tableOid(c, schema, d.actual);
+      await c.query(
+        `INSERT INTO identity_registry.objects (logical_id, kind, schema_name, table_name, table_oid)
+         VALUES ($1, 'table', $2, $3, $4::oid)`,
+        [randomUUID(), schema, d.actual, oid],
+      );
+      const { rows: cols } = await c.query(
+        `SELECT attnum, attname FROM pg_attribute
+         WHERE attrelid = $1::oid AND attnum > 0 AND NOT attisdropped
+         ORDER BY attnum`,
+        [oid],
+      );
+      for (const col of cols) {
+        await c.query(
+          `INSERT INTO identity_registry.objects
+             (logical_id, kind, schema_name, table_name, column_name, table_oid, attnum)
+           VALUES ($1, 'column', $2, $3, $4, $5::oid, $6)`,
+          [randomUUID(), schema, d.actual, col.attname, oid, col.attnum],
+        );
+      }
+      summary.registered.tables++;
+      summary.registered.columns += cols.length;
+    }
+
+    for (const d of byStatus("untracked").filter((d) => d.kind === "column")) {
+      // Resolve the owning table by oid, not by d.tableName — the registry
+      // name may have just been healed if this same sync renamed the table.
+      const { rows } = await c.query(
+        `SELECT table_name FROM identity_registry.objects
+         WHERE schema_name = $1 AND kind = 'table' AND table_oid = $2::oid AND dropped_at IS NULL`,
+        [schema, d.tableOid],
+      );
+      const attnum = await columnAttnum(c, d.tableOid, d.actual);
+      await c.query(
+        `INSERT INTO identity_registry.objects
+           (logical_id, kind, schema_name, table_name, column_name, table_oid, attnum)
+         VALUES ($1, 'column', $2, $3, $4, $5::oid, $6)`,
+        [randomUUID(), schema, rows[0].table_name, d.actual, d.tableOid, attnum],
+      );
+      summary.registered.columns++;
+    }
+
+    return summary;
+  },
+
   async cloneSchema(c, { from, to }) {
     await c.query(`CREATE SCHEMA ${ident(to)}`);
     const { rows: tables } = await c.query(
@@ -676,6 +769,7 @@ export async function verify(db, schema) {
           status: "untracked",
           actual: lc.attname,
           tableName: t.table_name,
+          tableOid: t.table_oid,
         });
       }
     }

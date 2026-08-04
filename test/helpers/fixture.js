@@ -51,6 +51,9 @@ export class Fixture {
     await this.pool.query(
       `DELETE FROM identity_registry.control WHERE schema_name = ANY($1)`, [this.allSchemas],
     );
+    await this.pool.query(
+      `DELETE FROM identity_registry.migrations WHERE schema_name = ANY($1)`, [this.allSchemas],
+    );
   }
 
   async teardown() {
